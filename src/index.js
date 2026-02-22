@@ -1,56 +1,41 @@
-import { eq } from 'drizzle-orm';
-// The 'pool' export will only exist for WebSocket and node-postgres drivers
-import { db, pool } from './db.js';
-import { demoUsers } from './schema.js';
+import AgentAPI from "apminsight";
+AgentAPI.config();
 
-async function main() {
-  try {
-    console.log('Performing CRUD operations...');
+import express from "express";
+import http from "http";
+import { matchRouter } from "./routes/matches.js";
+import { attachWebSocketServer } from "./ws/server.js";
+import { securityMiddleware } from "./arcjet.js";
+import { commentaryRouter } from "./routes/commentary.js";
 
-    // CREATE: Insert a new user
-    const [newUser] = await db
-      .insert(demoUsers)
-      .values({ name: 'Admin User', email: 'admin@example.com' })
-      .returning();
+const PORT = Number(process.env.PORT || 8000);
+const HOST = process.env.HOST || "0.0.0.0";
 
-    if (!newUser) {
-      throw new Error('Failed to create user');
-    }
-    
-    console.log('✅ CREATE: New user created:', newUser);
+const app = express();
+const server = http.createServer(app);
 
-    // READ: Select the user
-    const foundUser = await db.select().from(demoUsers).where(eq(demoUsers.id, newUser.id));
-    console.log('✅ READ: Found user:', foundUser[0]);
+app.use(express.json());
 
-    // UPDATE: Change the user's name
-    const [updatedUser] = await db
-      .update(demoUsers)
-      .set({ name: 'Super Admin' })
-      .where(eq(demoUsers.id, newUser.id))
-      .returning();
-    
-    if (!updatedUser) {
-      throw new Error('Failed to update user');
-    }
-    
-    console.log('✅ UPDATE: User updated:', updatedUser);
+app.get("/", (req, res) => {
+  res.send("Hello from Express server!");
+});
 
-    // DELETE: Remove the user
-    await db.delete(demoUsers).where(eq(demoUsers.id, newUser.id));
-    console.log('✅ DELETE: User deleted.');
+app.use(securityMiddleware());
 
-    console.log('\nCRUD operations completed successfully.');
-  } catch (error) {
-    console.error('❌ Error performing CRUD operations:', error);
-    process.exit(1);
-  } finally {
-    // If the pool exists, end it to close the connection
-    if (pool) {
-      await pool.end();
-      console.log('Database pool closed.');
-    }
-  }
-}
+app.use("/matches", matchRouter);
+app.use("/matches/:id/commentary", commentaryRouter);
 
-main();
+const { broadcastMatchCreated, broadcastCommentary } =
+  attachWebSocketServer(server);
+app.locals.broadcastMatchCreated = broadcastMatchCreated;
+app.locals.broadcastCommentary = broadcastCommentary;
+
+server.listen(PORT, HOST, () => {
+  const baseUrl =
+    HOST === "0.0.0.0" ? `http://localhost:${PORT}` : `http://${HOST}:${PORT}`;
+
+  console.log(`Server is running on ${baseUrl}`);
+  console.log(
+    `WebSocket Server is running on ${baseUrl.replace("http", "ws")}/ws`,
+  );
+});
